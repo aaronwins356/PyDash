@@ -1,500 +1,567 @@
-"""
-PPO (Proximal Policy Optimization) Dashboard
-==============================================
-This Streamlit dashboard visualizes the mathematics behind PPO's clipping mechanism,
-demonstrating how it constrains policy updates to ensure stable learning.
-"""
-
 import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
 
-# ============================================================================
-# COMPUTATION FUNCTIONS
-# ============================================================================
+# ---------- PAGE CONFIG ----------
+st.set_page_config(
+    page_title="RL Mind-Map Dashboard",
+    layout="wide",
+)
 
-def compute_unclipped_objective(r_theta, advantage):
+# ---------- GLOBAL STYLE ----------
+st.markdown(
     """
-    Compute the unclipped policy gradient objective.
-    
-    Parameters:
-    -----------
-    r_theta : float or np.ndarray
-        Policy ratio: pi_theta(a|s) / pi_old(a|s)
-    advantage : float
-        Advantage estimate A(s,a)
-    
-    Returns:
-    --------
-    float or np.ndarray
-        Unclipped objective value: r(theta) * A
-    """
-    return r_theta * advantage
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;700&family=Permanent+Marker&display=swap');
+
+        html, body, [class*="css"] {
+            background-color: #000000 !important;
+            color: #FFFFFF !important;
+        }
+
+        .main-title {
+            font-family: 'Playfair Display', serif;
+            font-size: 3.0rem;
+            text-align: center;
+            margin-top: 0.5rem;
+            margin-bottom: 0.2rem;
+        }
+
+        .subtitle {
+            font-family: 'Playfair Display', serif;
+            font-size: 1.2rem;
+            text-align: center;
+            color: #dddddd;
+            margin-bottom: 2rem;
+        }
+
+        .section-title {
+            font-family: 'Playfair Display', serif;
+            font-size: 1.6rem;
+            margin-top: 2rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .script-title {
+            font-family: 'Permanent Marker', cursive;
+            font-size: 2.0rem;
+            text-align: center;
+            margin-top: 3rem;
+            margin-bottom: 1rem;
+        }
+
+        .card {
+            border-radius: 12px;
+            border: 1px solid #444444;
+            padding: 1.0rem 1.3rem;
+            margin-bottom: 1.5rem;
+            background: #050505;
+        }
+
+        .highlight-card {
+            border-radius: 16px;
+            border: 2px solid #e5c15a;
+            padding: 1.5rem 2rem;
+            margin: 2rem auto;
+            max-width: 900px;
+            background: rgba(10, 10, 10, 0.9);
+        }
+
+        .pill {
+            border-radius: 999px;
+            padding: 0.2rem 0.8rem;
+            font-size: 0.8rem;
+            border: 1px solid #555555;
+            display: inline-block;
+            margin-bottom: 0.4rem;
+        }
+
+        .algo-pill-ppo { border-color: #4aa8ff; }
+        .algo-pill-sac { border-color: #67e37f; }
+        .algo-pill-dqn { border-color: #ffc857; }
+
+        .small-caption {
+            font-size: 0.8rem;
+            color: #bbbbbb;
+            text-align: center;
+            margin-top: 0.4rem;
+        }
+
+        .arrow-down {
+            font-size: 1.4rem;
+            text-align: center;
+            margin-top: 0.6rem;
+            margin-bottom: 0.3rem;
+        }
+
+        hr {
+            border: none;
+            border-top: 1px solid #333333;
+            margin: 2.5rem 0 1.5rem 0;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+plt.style.use("dark_background")
+np.random.seed(0)
 
 
-def compute_clipped_objective(r_theta, advantage, epsilon):
-    """
-    Compute the clipped surrogate objective used in PPO.
-    
-    Parameters:
-    -----------
-    r_theta : float or np.ndarray
-        Policy ratio: pi_theta(a|s) / pi_old(a|s)
-    advantage : float
-        Advantage estimate A(s,a)
-    epsilon : float
-        Clipping parameter (typically 0.1 to 0.3)
-    
-    Returns:
-    --------
-    float or np.ndarray
-        Clipped objective: min(r*A, clip(r, 1-eps, 1+eps)*A)
-    """
-    # Clip the ratio to [1-epsilon, 1+epsilon]
-    r_clipped = np.clip(r_theta, 1 - epsilon, 1 + epsilon)
-    
-    # Take the minimum of clipped and unclipped objectives
-    objective_unclipped = r_theta * advantage
-    objective_clipped = r_clipped * advantage
-    
-    return np.minimum(objective_unclipped, objective_clipped)
+# ---------- PLOTTING HELPERS ----------
 
+def plot_rl_loop():
+    fig, ax = plt.subplots(figsize=(4, 2.4))
+    ax.axis("off")
 
-def identify_clipping_regions(r_theta, advantage, epsilon):
-    """
-    Identify where clipping is active.
-    
-    Parameters:
-    -----------
-    r_theta : np.ndarray
-        Policy ratio values
-    advantage : float
-        Advantage estimate
-    epsilon : float
-        Clipping parameter
-    
-    Returns:
-    --------
-    tuple of np.ndarray
-        (lower_clip_mask, upper_clip_mask) - boolean arrays indicating clipping regions
-    """
-    if advantage >= 0:
-        # For positive advantage, clipping occurs when r > 1 + epsilon
-        lower_clip = np.zeros_like(r_theta, dtype=bool)
-        upper_clip = r_theta > (1 + epsilon)
-    else:
-        # For negative advantage, clipping occurs when r < 1 - epsilon
-        lower_clip = r_theta < (1 - epsilon)
-        upper_clip = np.zeros_like(r_theta, dtype=bool)
-    
-    return lower_clip, upper_clip
+    # Agent box
+    ax.add_patch(plt.Rectangle((0.1, 0.3), 0.25, 0.4,
+                               edgecolor="#4aa8ff", facecolor="none", linewidth=2))
+    ax.text(0.225, 0.5, "Agent", ha="center", va="center", fontsize=11)
 
+    # Env box
+    ax.add_patch(plt.Rectangle((0.65, 0.3), 0.25, 0.4,
+                               edgecolor="#67e37f", facecolor="none", linewidth=2))
+    ax.text(0.775, 0.5, "Environment", ha="center", va="center", fontsize=11)
 
-# ============================================================================
-# PLOTTING FUNCTION
-# ============================================================================
+    # Action arrow
+    ax.annotate("action",
+                xy=(0.35, 0.55), xytext=(0.65, 0.55),
+                arrowprops=dict(arrowstyle="->", color="white"),
+                ha="center", va="center", fontsize=9)
 
-def plot_ppo_objectives(r_theta_range, advantage, epsilon):
-    """
-    Create a matplotlib figure showing both clipped and unclipped objectives.
-    
-    Parameters:
-    -----------
-    r_theta_range : tuple
-        (min, max) values for r(theta) to plot
-    advantage : float
-        Advantage estimate A(s,a)
-    epsilon : float
-        Clipping parameter
-    
-    Returns:
-    --------
-    matplotlib.figure.Figure
-        The generated figure
-    """
-    # Generate r(theta) values
-    r_theta = np.linspace(r_theta_range[0], r_theta_range[1], 1000)
-    
-    # Compute objectives
-    unclipped = compute_unclipped_objective(r_theta, advantage)
-    clipped = compute_clipped_objective(r_theta, advantage, epsilon)
-    
-    # Identify clipping regions
-    lower_clip, upper_clip = identify_clipping_regions(r_theta, advantage, epsilon)
-    
-    # Create figure
-    fig, ax = plt.subplots(figsize=(10, 6))
-    
-    # Plot unclipped objective
-    ax.plot(r_theta, unclipped, 'b--', linewidth=2, label='Unclipped: r(θ)·A', alpha=0.7)
-    
-    # Plot clipped objective
-    ax.plot(r_theta, clipped, 'r-', linewidth=2.5, label='Clipped (PPO): min(r·A, clip(r)·A)')
-    
-    # Highlight clipping regions
-    if np.any(lower_clip):
-        ax.fill_between(r_theta, np.min(clipped), np.max(unclipped), 
-                        where=lower_clip, alpha=0.2, color='orange',
-                        label=f'Lower clip region (r < {1-epsilon:.2f})')
-    
-    if np.any(upper_clip):
-        ax.fill_between(r_theta, np.min(clipped), np.max(unclipped),
-                        where=upper_clip, alpha=0.2, color='red',
-                        label=f'Upper clip region (r > {1+epsilon:.2f})')
-    
-    # Mark the original policy point (r=1)
-    ax.axvline(x=1.0, color='gray', linestyle=':', linewidth=1.5, alpha=0.5, label='Old policy (r=1)')
-    ax.axhline(y=0, color='black', linestyle='-', linewidth=0.5, alpha=0.3)
-    
-    # Mark clipping boundaries
-    ax.axvline(x=1-epsilon, color='orange', linestyle='--', linewidth=1, alpha=0.5)
-    ax.axvline(x=1+epsilon, color='orange', linestyle='--', linewidth=1, alpha=0.5)
-    
-    # Labels and title
-    ax.set_xlabel('Policy Ratio r(θ) = π_θ(a|s) / π_old(a|s)', fontsize=12)
-    ax.set_ylabel('Objective Value', fontsize=12)
-    ax.set_title(f'PPO Clipping Mechanism (ε={epsilon}, A={advantage:.2f})', fontsize=14, fontweight='bold')
-    ax.legend(loc='best', fontsize=9)
-    ax.grid(True, alpha=0.3)
-    
-    plt.tight_layout()
+    # State/reward arrow
+    ax.annotate("state, reward",
+                xy=(0.65, 0.42), xytext=(0.35, 0.42),
+                arrowprops=dict(arrowstyle="->", color="white"),
+                ha="center", va="center", fontsize=9)
+
     return fig
 
 
-# ============================================================================
-# STREAMLIT APP
-# ============================================================================
+def plot_learning_curve():
+    steps = np.arange(0, 200)
+    true_trend = 1 - np.exp(-steps / 70)
+    noise = np.random.normal(scale=0.08, size=len(steps))
+    rewards = true_trend + noise * (1.1 - true_trend)
 
-def main():
-    """Main Streamlit application."""
-    
-    # Page configuration
-    st.set_page_config(
-        page_title="PPO Dashboard",
-        page_icon="🤖",
-        layout="wide"
+    fig, ax = plt.subplots(figsize=(5, 3))
+    ax.plot(steps, rewards, linewidth=1.5)
+    ax.set_xlabel("Training Steps")
+    ax.set_ylabel("Average Reward")
+    ax.set_title("Noisy Learning Curve")
+    ax.grid(alpha=0.2)
+    return fig
+
+
+def plot_explore_exploit():
+    steps = np.arange(0, 200)
+    exploit = 0.4 + 0.7 * (1 - np.exp(-steps / 50))
+    explore = 0.2 + 0.9 * (1 - np.exp(-steps / 110))
+
+    fig, ax = plt.subplots(figsize=(5, 3))
+    ax.plot(steps, exploit, label="Greedy / low exploration")
+    ax.plot(steps, explore, label="Balanced exploration")
+    ax.set_xlabel("Training Steps")
+    ax.set_ylabel("Cumulative Reward")
+    ax.set_title("Exploration vs Exploitation")
+    ax.legend()
+    ax.grid(alpha=0.2)
+    return fig
+
+
+def plot_policy_shift():
+    x = np.linspace(-2.5, 2.5, 400)
+    pi_old = 1/np.sqrt(2*np.pi*0.6**2) * np.exp(-(x - 0.0)**2/(2*0.6**2))
+    pi_new = 1/np.sqrt(2*np.pi*0.6**2) * np.exp(-(x - 0.6)**2/(2*0.6**2))
+
+    fig, ax = plt.subplots(figsize=(5, 3))
+    ax.plot(x, pi_old, "b--", label=r"$\pi_{\mathrm{old}}$")
+    ax.plot(x, pi_new, "r-", label=r"$\pi_{\mathrm{new}}$")
+    ax.fill_between(x, pi_old, pi_new, where=pi_new>pi_old,
+                    color="red", alpha=0.15)
+    ax.set_xlabel("Action Space")
+    ax.set_ylabel("Probability")
+    ax.set_title("Policy Shift (Policy Gradient)")
+    ax.legend()
+    ax.grid(alpha=0.2)
+    return fig
+
+
+def plot_value_selection():
+    actions = ["A1", "A2", "A3", "A4"]
+    q_vals = [2.1, 3.7, 1.0, 2.9]
+
+    fig, ax = plt.subplots(figsize=(4.5, 3))
+    bars = ax.bar(actions, q_vals)
+    best_idx = int(np.argmax(q_vals))
+    bars[best_idx].set_edgecolor("#ffc857")
+    bars[best_idx].set_linewidth(2)
+    ax.set_ylabel("Q-Value")
+    ax.set_title("Value-Based Selection (DQN-style)")
+    ax.grid(axis="y", alpha=0.2)
+    return fig
+
+
+def plot_ppo_clipping():
+    r = np.linspace(0.6, 2.0, 400)
+    A = 1.0
+    unclipped = r * A
+    eps = 0.2
+    clipped = np.clip(r, 1 - eps, 1 + eps) * A
+
+    fig, ax = plt.subplots(figsize=(4.5, 3))
+    ax.plot(r, unclipped, "--", label="Unclipped objective")
+    ax.plot(r, clipped, "r", label="PPO clipped objective")
+    ax.axvline(1 - eps, color="orange", linestyle=":")
+    ax.axvline(1 + eps, color="orange", linestyle=":")
+    ax.text(1 - eps, 0.5, "1 - ε", color="orange", rotation=90, va="bottom")
+    ax.text(1 + eps, 0.5, "1 + ε", color="orange", rotation=90, va="bottom")
+    ax.set_xlabel("Probability Ratio r = π_new / π_old")
+    ax.set_ylabel("Scaled Objective (A > 0)")
+    ax.set_title("PPO Clipping")
+    ax.legend()
+    ax.grid(alpha=0.2)
+    return fig
+
+
+def plot_entropy_distributions():
+    x = np.linspace(-3, 3, 400)
+    low = 1/np.sqrt(2*np.pi*0.6**2) * np.exp(-(x)**2/(2*0.6**2))
+    high = 1/np.sqrt(2*np.pi*1.5**2) * np.exp(-(x)**2/(2*1.5**2))
+
+    fig, ax = plt.subplots(figsize=(4.5, 3))
+    ax.plot(x, low, "r", label="Low Entropy (confident)")
+    ax.plot(x, high, "g", label="High Entropy (uncertain)")
+    ax.fill_between(x, low, alpha=0.1, color="red")
+    ax.fill_between(x, high, alpha=0.1, color="green")
+    ax.set_xlabel("Action")
+    ax.set_ylabel("Probability")
+    ax.set_title("Entropy Regularization (SAC)")
+    ax.legend()
+    ax.grid(alpha=0.2)
+    return fig
+
+
+def plot_dqn_temporal_difference():
+    t = np.arange(0, 10)
+    true_values = 3 + 2*np.sin(t/2)
+    approx = true_values + np.random.normal(scale=0.4, size=len(t))
+    target = true_values + np.random.normal(scale=0.2, size=len(t))
+
+    fig, ax = plt.subplots(figsize=(4.8, 3))
+    ax.plot(t, true_values, label="True value", linewidth=1.5)
+    ax.plot(t, approx, "--", label="Q(s,a) prediction")
+    ax.plot(t, target, ":", label="Target value", linewidth=1.5)
+    ax.set_xlabel("Time / Update")
+    ax.set_ylabel("Value")
+    ax.set_title("Temporal-Difference Targets (DQN)")
+    ax.legend()
+    ax.grid(alpha=0.2)
+    return fig
+
+
+# ---------- TITLE ----------
+st.markdown('<div class="main-title">Reinforcement Learning Mind-Map</div>', unsafe_allow_html=True)
+st.markdown('<div class="subtitle">RL, PPO, SAC, and DQN — a visual overview for teaching and storytelling</div>', unsafe_allow_html=True)
+
+# ---------- INTRO: WHAT IS RL ----------
+st.markdown('<div class="section-title">What is Reinforcement Learning and why is it useful?</div>', unsafe_allow_html=True)
+
+col_intro_left, col_intro_right = st.columns([1.2, 1.0])
+
+with col_intro_left:
+    st.markdown(
+        """
+        In **Reinforcement Learning (RL)**, an *agent* learns to make a sequence of decisions
+        by interacting with an **environment**.  
+        
+        The agent:
+        - observes a **state** of the world,
+        - chooses an **action**,
+        - receives a **reward** signal,
+        - and transitions to a new state.
+
+        Over time, the goal is to learn a **policy** – a mapping from states to actions –
+        that maximizes **long-term cumulative reward**.
+
+        RL is useful when:
+        - we don’t have labeled examples of “correct” actions,
+        - actions have **consequences over time**,
+        - and we can try things, observe outcomes, and improve.
+        
+        **Examples:**
+        - Game-playing agents (Atari, Go, Dota)
+        - Robotics and control
+        - Recommendation systems and advertising
+        - Finance and trading strategies
+        """
     )
-    
-    # Title and introduction
-    st.title("🤖 Proximal Policy Optimization (PPO) Dashboard")
-    st.markdown("**Interactive visualization of PPO's clipping mechanism**")
-    
-    # Sidebar controls
-    st.sidebar.header("📊 Control Parameters")
-    st.sidebar.markdown("---")
-    
-    # Epsilon (clipping parameter)
-    epsilon = st.sidebar.slider(
-        "Clipping Parameter (ε)",
-        min_value=0.01,
-        max_value=0.5,
-        value=0.2,
-        step=0.01,
-        help="Controls how much the policy can change. Typical values: 0.1-0.3"
+
+with col_intro_right:
+    fig_loop = plot_rl_loop()
+    st.pyplot(fig_loop)
+    st.caption("The RL feedback loop: the agent learns from delayed consequences of its own actions.")
+
+st.markdown("---")
+
+# ---------- DEFINITIONS: AGENT / ENTROPY / EXPLORATION ----------
+st.markdown('<div class="section-title">Core Definitions</div>', unsafe_allow_html=True)
+
+d1, d2, d3 = st.columns(3)
+
+with d1:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.markdown("### Agent")
+    st.markdown(
+        """
+        The **agent** is the decision-maker.
+
+        - Receives observations or states from the environment  
+        - Chooses actions using a **policy**  
+        - Updates its policy based on rewards and experience  
+
+        In code, the agent is usually a neural network that outputs
+        action probabilities or value estimates.
+        """
     )
-    
-    # Advantage
-    advantage = st.sidebar.slider(
-        "Advantage A(s,a)",
-        min_value=-5.0,
-        max_value=5.0,
-        value=1.0,
-        step=0.1,
-        help="Positive advantage = good action, Negative = bad action"
+    st.markdown('</div>', unsafe_allow_html=True)
+
+with d2:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.markdown("### Entropy")
+    st.markdown(
+        """
+        **Entropy** measures how *uncertain* or *spread out* a probability distribution is.
+
+        - **High entropy** → the policy is unsure and explores many actions  
+        - **Low entropy** → the policy is confident and chooses a few actions often  
+
+        Algorithms like **SAC** explicitly **maximize entropy** to encourage exploration:
+        they prefer policies that earn reward *and* stay suitably uncertain.
+        """
     )
-    
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("Policy Ratio Range")
-    
-    # r(theta) range
-    r_min = st.sidebar.number_input(
-        "Minimum r(θ)",
-        min_value=0.0,
-        max_value=2.0,
-        value=0.5,
-        step=0.1
+    st.markdown('</div>', unsafe_allow_html=True)
+
+with d3:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.markdown("### Exploration")
+    st.markdown(
+        """
+        **Exploration** is the process of trying actions whose outcomes are not yet well known.
+
+        - Prevents the agent from getting stuck in mediocre behaviors  
+        - Trades off against **exploitation**, where we choose the best-known action  
+        - Often implemented via randomness, entropy bonuses, or ε-greedy strategies  
+
+        Good RL algorithms carefully balance **explore vs exploit** over time.
+        """
     )
-    
-    r_max = st.sidebar.number_input(
-        "Maximum r(θ)",
-        min_value=0.5,
-        max_value=3.0,
-        value=2.0,
-        step=0.1
+    st.markdown('</div>', unsafe_allow_html=True)
+
+g1, g2 = st.columns(2)
+with g1:
+    st.pyplot(plot_entropy_distributions())
+    st.caption("High entropy spreads probability mass across actions → better early exploration.")
+with g2:
+    st.pyplot(plot_explore_exploit())
+    st.caption("Greedy policies learn fast but can plateau; exploration can lead to better long-term reward.")
+
+st.markdown("---")
+
+# ---------- TANGENT CONCEPTS ----------
+st.markdown('<div class="section-title">Tangent Concepts that Make RL Click</div>', unsafe_allow_html=True)
+
+tc1, tc2 = st.columns(2)
+
+with tc1:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.markdown("#### Markov Decision Processes (MDPs)")
+    st.markdown(
+        """
+        RL problems are often modeled as **MDPs**:  
+        \nA tuple *(S, A, P, R, γ)* where:
+        - **S** – set of states  
+        - **A** – set of actions  
+        - **P** – transition dynamics  
+        - **R** – reward function  
+        - **γ** – discount factor for future rewards  
+
+        *Markov* means: the future depends on the current state and action,
+        not on the entire past history.
+        """
     )
-    
-    # Ensure valid range
-    if r_min >= r_max:
-        st.sidebar.error("⚠️ Minimum must be less than Maximum!")
-        return
-    
-    # Main visualization
-    st.markdown("---")
-    
-    # Create two columns for layout
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        st.subheader("📈 Objective Function Visualization")
-        
-        # Generate and display plot
-        fig = plot_ppo_objectives((r_min, r_max), advantage, epsilon)
-        st.pyplot(fig)
-        plt.close(fig)  # Clean up
-    
-    with col2:
-        st.subheader("📋 Current Values")
-        st.metric("Epsilon (ε)", f"{epsilon:.3f}")
-        st.metric("Advantage (A)", f"{advantage:.2f}")
-        st.metric("Clip Range", f"[{1-epsilon:.3f}, {1+epsilon:.3f}]")
-        
-        st.markdown("---")
-        
-        # Show what happens at key points
-        st.markdown("**At r(θ) = 1.0:**")
-        obj_at_1 = compute_clipped_objective(1.0, advantage, epsilon)
-        st.write(f"Objective = {obj_at_1:.3f}")
-        
-        st.markdown(f"**At r(θ) = {1+epsilon:.3f} (upper clip):**")
-        obj_at_upper = compute_clipped_objective(1+epsilon, advantage, epsilon)
-        st.write(f"Objective = {obj_at_upper:.3f}")
-        
-        st.markdown(f"**At r(θ) = {1-epsilon:.3f} (lower clip):**")
-        obj_at_lower = compute_clipped_objective(1-epsilon, advantage, epsilon)
-        st.write(f"Objective = {obj_at_lower:.3f}")
-    
-    # Educational content
-    st.markdown("---")
-    st.header("📚 Understanding PPO")
-    
-    # Create tabs for different explanations
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "Why Clipping?", 
-        "Policy Ratio r(θ)", 
-        "Advantages", 
-        "The Math"
-    ])
-    
-    with tab1:
-        st.markdown("""
-        ### Why Does PPO Use Clipping?
-        
-        **Problem:** Standard policy gradient methods can make large, destabilizing updates that 
-        hurt performance.
-        
-        **Solution:** PPO clips the objective function to prevent excessively large policy updates.
-        
-        #### How It Works:
-        1. **Positive Advantage (good action):** 
-           - We want to increase its probability
-           - But clipping at `1+ε` prevents making it *too* likely (over-optimization)
-        
-        2. **Negative Advantage (bad action):**
-           - We want to decrease its probability
-           - But clipping at `1-ε` prevents making it *too* unlikely (over-correction)
-        
-        #### Key Benefits:
-        - ✅ **Stability:** Prevents catastrophic policy collapses
-        - ✅ **Sample efficiency:** Can reuse data for multiple epochs
-        - ✅ **Simplicity:** No complex KL penalty calculations needed
-        - ✅ **Performance:** Works reliably across many environments
-        
-        **Try it:** Set advantage to +2.0 and watch how the objective plateaus beyond `1+ε`!
-        """)
-    
-    with tab2:
-        st.markdown("""
-        ### Understanding the Policy Ratio r(θ)
-        
-        The policy ratio measures how much the new policy differs from the old one:
-        
-        ```
-        r(θ) = π_θ(a|s) / π_old(a|s)
-        ```
-        
-        #### Interpretation:
-        - **r(θ) = 1.0**: New policy exactly matches old policy (no change)
-        - **r(θ) > 1.0**: New policy assigns *higher* probability to action `a`
-        - **r(θ) < 1.0**: New policy assigns *lower* probability to action `a`
-        
-        #### Examples:
-        - `r(θ) = 2.0` → New policy is **2x** more likely to take action `a`
-        - `r(θ) = 0.5` → New policy is **2x** less likely to take action `a`
-        
-        #### Why It Matters:
-        The ratio tells us *how much* we're changing the policy. Without clipping, 
-        large ratios (like r=5.0) could lead to drastic, harmful changes.
-        
-        **PPO's guarantee:** The ratio stays within `[1-ε, 1+ε]` for the optimization,
-        limiting the policy change to a safe range.
-        """)
-    
-    with tab3:
-        st.markdown("""
-        ### How Advantages Shape the Curve
-        
-        The advantage function `A(s,a)` estimates how much better action `a` is compared 
-        to the average action in state `s`.
-        
-        #### Sign and Magnitude:
-        - **A > 0**: Action is better than average → *increase* its probability
-        - **A < 0**: Action is worse than average → *decrease* its probability
-        - **|A| large**: Strong signal → steeper objective curve
-        - **|A| small**: Weak signal → flatter objective curve
-        
-        #### Effect on Clipping:
-        
-        **Positive Advantage (A > 0):**
-        - Unclipped objective grows with r(θ)
-        - Clipping activates at upper bound (r > 1+ε)
-        - Prevents *over-encouraging* good actions
-        
-        **Negative Advantage (A < 0):**
-        - Unclipped objective decreases with r(θ)
-        - Clipping activates at lower bound (r < 1-ε)
-        - Prevents *over-discouraging* bad actions
-        
-        **Interactive Experiment:**
-        1. Set A = +3.0 (very good action) → See upper clipping
-        2. Set A = -3.0 (very bad action) → See lower clipping
-        3. Set A = 0.0 (neutral) → No preference, flat objective
-        """)
-    
-    with tab4:
-        st.markdown("""
-        ### The Mathematics of PPO
-        
-        #### Standard Policy Gradient Objective:
-        ```
-        L^PG(θ) = 𝔼[r(θ) · A(s,a)]
-        ```
-        Problem: Can lead to excessively large updates.
-        
-        #### PPO Clipped Objective:
-        ```
-        L^CLIP(θ) = 𝔼[min(r(θ)·A, clip(r(θ), 1-ε, 1+ε)·A)]
-        ```
-        
-        Where:
-        - `r(θ) = π_θ(a|s) / π_old(a|s)` (probability ratio)
-        - `A = A(s,a)` (advantage estimate)
-        - `ε` (epsilon) is the clipping parameter (e.g., 0.2)
-        - `clip(x, min, max)` constrains x to [min, max]
-        
-        #### Why the Minimum?
-        
-        The `min()` operation creates a **pessimistic bound**:
-        
-        1. **When advantage is positive (good action):**
-           - If r(θ) > 1+ε: We cap the benefit at (1+ε)·A
-           - Prevents over-optimization
-        
-        2. **When advantage is negative (bad action):**
-           - If r(θ) < 1-ε: We cap the penalty at (1-ε)·A
-           - Prevents over-penalization
-        
-        #### In Practice:
-        PPO maximizes this objective over multiple epochs using the same batch of data,
-        which is more sample-efficient than vanilla policy gradients.
-        """)
-    
-    # Footer with extension ideas
-    st.markdown("---")
-    st.header("🔧 Extending This Dashboard")
-    
-    with st.expander("Click to see extension ideas"):
-        st.markdown("""
-        ### Potential Extensions:
-        
-        #### 1. **Add KL Divergence Penalty**
-        - Show the alternative PPO formulation with adaptive KL penalties
-        - Visualize: `L^KLPEN(θ) = 𝔼[r(θ)·A - β·KL(π_old||π_θ)]`
-        - Add slider for β (KL coefficient)
-        
-        #### 2. **Entropy Bonus**
-        - Encourage exploration with entropy term
-        - Visualize: `L^TOTAL(θ) = L^CLIP(θ) + c₁·L^VF(θ) + c₂·S[π_θ]`
-        - Add slider for c₂ (entropy coefficient)
-        
-        #### 3. **Value Function Component**
-        - Show the value loss: `L^VF = (V_θ(s) - V^target)²`
-        - Combined actor-critic visualization
-        
-        #### 4. **Multi-Action Comparison**
-        - Compare clipping behavior for multiple actions simultaneously
-        - Show how different advantages lead to different clipping patterns
-        
-        #### 5. **Training Trajectory Simulation**
-        - Animate how policy ratio evolves over training epochs
-        - Show convergence to optimal policy
-        
-        #### 6. **Real Environment Integration**
-        - Connect to Gym environments (CartPole, LunarLander)
-        - Live PPO training with real-time objective visualization
-        
-        #### 7. **Comparison with Other Methods**
-        - Side-by-side with TRPO (Trust Region Policy Optimization)
-        - Show vanilla policy gradient behavior without clipping
-        
-        #### 8. **3D Visualization**
-        - Plot objective as function of both r(θ) and ε
-        - Interactive 3D surface plot with Plotly
-        
-        #### 9. **Batch Statistics**
-        - Simulate a batch of (s,a) pairs with different advantages
-        - Show distribution of clipping across the batch
-        
-        #### 10. **Hyperparameter Sensitivity Analysis**
-        - Automated sweep over ε values
-        - Show impact on policy update magnitude
-        
-        ---
-        
-        ### Code Structure for Extensions:
-        
-        ```python
-        # Add new computation functions
-        def compute_kl_penalty(r_theta, beta):
-            return beta * (r_theta * np.log(r_theta) - (r_theta - 1))
-        
-        # Add to plotting function
-        def plot_with_kl(r_theta_range, advantage, epsilon, beta):
-            # ... existing code ...
-            kl_penalty = compute_kl_penalty(r_theta, beta)
-            ax.plot(r_theta, clipped - kl_penalty, label='With KL penalty')
-        
-        # Add new sidebar control
-        beta = st.sidebar.slider("KL Coefficient (β)", 0.0, 1.0, 0.01)
-        ```
-        
-        Feel free to fork and extend this dashboard for your own research or learning!
-        """)
 
+    st.markdown("#### Policies vs Value Functions")
+    st.markdown(
+        """
+        - A **policy** π(a|s) tells us **what to do**.  
+        - A **value function** V(s) or Q(s,a) tells us **how good it is**.  
 
-# ============================================================================
-# ENTRY POINT
-# ============================================================================
+        - **Policy-based** methods: directly learn π.  
+        - **Value-based** methods: learn Q, then choose greedy actions.  
+        - **Actor-critic**: learn **both**.
+        """
+    )
+    st.markdown('</div>', unsafe_allow_html=True)
 
-if __name__ == "__main__":
-    main()
+with tc2:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.markdown("#### On-policy vs Off-policy")
+    st.markdown(
+        """
+        - **On-policy**: learn from data generated by the *current* policy  
+          - Example: **PPO**  
+        - **Off-policy**: learn from data generated by *any* behavior policy  
+          - Examples: **DQN**, **SAC**
 
+        Off-policy methods can re-use old data (via replay buffers),
+        which can be much more **sample-efficient**.
+        """
+    )
 
-# ============================================================================
-# EXTENSION NOTES
-# ============================================================================
-# 
-# To extend this dashboard:
-# 1. Add new computation functions following the pattern above
-# 2. Create corresponding plotting functions or modify existing ones
-# 3. Add sidebar controls for new parameters
-# 4. Add educational tabs explaining the new concepts
-# 5. Keep the code modular and well-commented for easy modification
-#
-# Suggested improvements:
-# - Add KL divergence penalty visualization
-# - Include entropy bonus term
-# - Show value function loss component
-# - Add animation of policy updates over time
-# - Connect to real RL environments for live training visualization
-# - Add comparison with other policy gradient methods (TRPO, A3C, etc.)
-# ============================================================================
+    st.markdown("#### Advantages and Bellman Equations")
+    st.markdown(
+        """
+        The **advantage** function  
+        \n*A(s,a) = Q(s,a) − V(s)*  
+        tells us how much better an action is than average.
+
+        The **Bellman equation** links values recursively:  
+        \n*Q(s,a) = E[r + γ max<sub>a'</sub> Q(s',a')]*  
+
+        DQN and many value-based methods learn by reducing the gap between
+        current Q(s,a) estimates and these **targets**.
+        """
+    )
+    st.markdown('</div>', unsafe_allow_html=True)
+
+lc1, lc2 = st.columns(2)
+with lc1:
+    st.pyplot(plot_learning_curve())
+with lc2:
+    st.pyplot(plot_dqn_temporal_difference())
+
+st.markdown("---")
+
+# ---------- POLICY VS VALUE OPTIMIZATION ----------
+st.markdown('<div class="section-title">Policy Optimization vs Value Optimization</div>', unsafe_allow_html=True)
+
+upper_box = st.container()
+with upper_box:
+    col_p, col_v = st.columns(2)
+    with col_p:
+        st.pyplot(plot_policy_shift())
+        st.markdown(
+            """
+            **Policy-gradient approach**
+
+            - Directly adjusts the policy parameters  
+            - Learns **probability distributions** over actions  
+            - Ideal for **continuous action spaces**  
+            - Examples: PPO, SAC
+            """
+        )
+
+    with col_v:
+        st.pyplot(plot_value_selection())
+        st.markdown(
+            """
+            **Value-based approach**
+
+            - Learns **Q-values**: how good is action *a* in state *s*?  
+            - Agent chooses action with largest Q(s,a)  
+            - Naturally suited to **discrete actions**  
+            - Examples: DQN and its variants
+            """
+        )
+
+st.markdown("---")
+
+# ---------- THREE PILLARS SECTIONS ----------
+st.markdown('<div class="section-title">Three Pillars of Modern Deep RL</div>', unsafe_allow_html=True)
+
+top_cards = st.columns(3)
+
+with top_cards[0]:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.markdown('<span class="pill algo-pill-ppo">PPO</span>', unsafe_allow_html=True)
+    st.markdown("### Proximal Policy Optimization")
+    st.markdown(
+        """
+        - On-policy **actor-critic** method  
+        - Uses a **clipped surrogate objective** to prevent destructive updates  
+        - Multiple epochs on the same mini-batches  
+        - Widely used in practice (games, simulators)
+        """
+    )
+    st.markdown('</div>', unsafe_allow_html=True)
+
+with top_cards[1]:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.markdown('<span class="pill algo-pill-sac">SAC</span>', unsafe_allow_html=True)
+    st.markdown("### Soft Actor-Critic")
+    st.markdown(
+        """
+        - Off-policy **maximum entropy** RL  
+        - Stochastic Gaussian policy (mean & std)  
+        - Twin Q-networks reduce overestimation  
+        - Very strong for continuous control and robotics
+        """
+    )
+    st.markdown('</div>', unsafe_allow_html=True)
+
+with top_cards[2]:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.markdown('<span class="pill algo-pill-dqn">DQN</span>', unsafe_allow_html=True)
+    st.markdown("### Deep Q-Network")
+    st.markdown(
+        """
+        - Value-based method for **discrete actions**  
+        - Uses **experience replay** and a **target network**  
+        - Learned to play Atari directly from pixels  
+        - Foundation for many modern Q-learning variants
+        """
+    )
+    st.markdown('</div>', unsafe_allow_html=True)
+
+st.markdown('<div class="arrow-down">↓</div>', unsafe_allow_html=True)
+
+algo_row = st.columns(3)
+
+with algo_row[0]:
+    st.pyplot(plot_ppo_clipping())
+    st.caption("PPO clips probability ratios to keep policy updates in a safe range.")
+
+with algo_row[1]:
+    st.pyplot(plot_entropy_distributions())
+    st.caption("SAC trades reward for entropy: it prefers policies that are both good and uncertain.")
+
+with algo_row[2]:
+    st.pyplot(plot_value_selection())
+    st.caption("DQN estimates Q(s,a) and chooses the action with highest predicted value.")
+
+st.markdown("---")
+
+# ---------- CONCLUSION ----------
+st.markdown('<div class="script-title">The Landscape of Modern RL</div>', unsafe_allow_html=True)
+
+st.markdown(
+    """
+    <div class="highlight-card">
+        <p style="text-align:center;">
+            <span style="color:#4aa8ff;">PPO</span> for stable on-policy learning,<br>
+            <span style="color:#67e37f;">SAC</span> for sample-efficient continuous control,<br>
+            <span style="color:#ffc857;">DQN</span> for powerful value-based learning in discrete action spaces.
+        </p>
+        <p style="text-align:center; margin-top:0.7rem;">
+            Each algorithm tackles RL's core challenges — exploration, instability, and delayed reward —<br>
+            but all aim for the same outcome: <b>intelligent behavior through trial and error.</b>
+        </p>
+        <p style="text-align:center; margin-top:0.7rem; font-size:0.9rem; color:#bbbbbb;">
+            → Natural next topics: Actor-Critic methods, TRPO, TD3, distributional RL, and transformer-based agents.
+        </p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
